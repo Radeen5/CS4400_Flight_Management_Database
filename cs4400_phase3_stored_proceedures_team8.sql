@@ -726,7 +726,7 @@ sp_main: begin
     end if;
     
 -- Passanger is on ground 
-    if (ip_personID in (SELECT personID FROM passenger WHERE personID in (SELECT personID FROM person WHERE locationID LIKE '%plane%'))) then 
+    if (ip_personID in (SELECT personID FROM passenger WHERE personID in (SELECT personID FROM person WHERE locationID LIKE 'port_%'))) then 
 		leave sp_main;
     end if;
     
