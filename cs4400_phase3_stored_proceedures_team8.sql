@@ -35,37 +35,45 @@ create procedure add_airplane (in ip_airlineID varchar(50), in ip_tail_num varch
     in ip_jet_engines integer)
 sp_main: begin
 
-	-- Airline Sponsorship
-    if ip_airlineID not in (SELECT airlineID FROM airline) then
-		leave sp_main;
-	end if;
+DECLARE airlineExists INT;
+DECLARE tailNumExists INT;
+DECLARE validLocation INT;
+
+-- Check Airline Sponsorship
+SELECT COUNT(*) INTO airlineExists FROM airline WHERE airlineID = ip_airlineID;
+
+-- Check Unique Tail Number
+SELECT COUNT(*) INTO tailNumExists FROM airplane WHERE airlineID = ip_airlineID AND tail_num = ip_tail_num;
+
+-- Check Seat Capacity and Speed
+IF ip_seat_capacity = 0 OR ip_speed = 0 THEN
+    SET airlineExists = 0;
+END IF;
+
+-- Check Airplane Location Identifier 
+IF ip_locationID IS NOT NULL THEN
+    SELECT COUNT(DISTINCT locationID) INTO validLocation FROM airplane WHERE locationID = ip_locationID;
+    IF validLocation > 0 THEN
+        SET airlineExists = 0;
+    END IF;
     
-    -- Uniqe Tail Number
-    if (ip_airlineID, ip_tail_num) in (SELECT airlineID, tail_num FROM airplane) then
-		leave sp_main;
-	end if;
-    
-    -- Seat Capacity and Speed
-    if (ip_seat_capacity = 0) OR (ip_speed = 0) then
-		leave sp_main;
-	end if;
-    
-    -- Airplane location identifier 
-    if (ip_locationID) is NOT NULL AND (ip_locationID) in (SELECT DISTINCT locationID FROM airplane) then
-		leave sp_main;
-	end if;
-    
-    if (ip_locationID) is NOT NULL AND (ip_locationID) in (SELECT * FROM location WHERE locationID LIKE 'plane%') then
-		leave sp_main;
-	end if;
-    
-    -- Airplane Instert Statement   
-	insert into airplane(airlineID, tail_num, seat_capacity, speed, locationID, plane_type, skids,propellers, jet_engines) values (ip_airlineID, ip_tail_num, ip_seat_capacity, ip_speed, ip_locationID, ip_plane_type, ip_skids, ip_propellers, ip_jet_engines);
-    
-    -- Location Insert Statement 
-    if (ip_locationID) is NOT NULL AND (ip_locationID) not in (SELECT * FROM location WHERE locationID LIKE 'plane%') then
-		insert into location(locationID)values (ip_locationID);
-	end if;
+    IF NOT EXISTS (SELECT 1 FROM location WHERE locationID = ip_locationID AND locationID LIKE 'plane%') THEN
+        SET airlineExists = 0;
+    END IF;
+END IF;
+
+IF airlineExists = 0 THEN
+    LEAVE sp_main;
+END IF;
+
+-- Airplane Insert Statement   
+INSERT INTO airplane (airlineID, tail_num, seat_capacity, speed, locationID, plane_type, skids, propellers, jet_engines)
+VALUES (ip_airlineID, ip_tail_num, ip_seat_capacity, ip_speed, ip_locationID, ip_plane_type, ip_skids, ip_propellers, ip_jet_engines);
+
+-- Location Insert Statement 
+IF ip_locationID IS NOT NULL AND NOT EXISTS (SELECT 1 FROM location WHERE locationID = ip_locationID AND locationID LIKE 'plane%') THEN
+    INSERT INTO location (locationID) VALUES (ip_locationID);
+END IF;
 
 end //
 delimiter ;
@@ -726,7 +734,7 @@ sp_main: begin
     end if;
     
 -- Passanger is on ground 
-    if (ip_personID in (SELECT personID FROM passenger WHERE personID in (SELECT personID FROM person WHERE locationID LIKE 'port_%'))) then 
+    if (ip_personID in (SELECT personID FROM passenger WHERE personID in (SELECT personID FROM person WHERE locationID LIKE '%plane%'))) then 
 		leave sp_main;
     end if;
     
@@ -937,3 +945,4 @@ end if;
 
 end //
 delimiter ;
+
