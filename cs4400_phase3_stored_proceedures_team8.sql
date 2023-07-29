@@ -467,10 +467,10 @@ delimiter //
 create procedure flight_takeoff (in ip_flightID varchar(50))
 sp_main: begin
 
-
 -- Constraint: Flight must exist 
-DECLARE next_duration INT DEFAULT 0;
-IF ip_flightID NOT IN (SELECT flightID FROM flight) THEN
+DECLARE nextDuration INT DEFAULT 0;
+
+IF NOT EXISTS (SELECT flightID FROM flight WHERE flightID = ip_flightID) THEN
     LEAVE sp_main;
 END IF;
 
@@ -482,9 +482,16 @@ IF (
     WHERE f.flightID = ip_flightID
 ) = 'jet' AND (
     SELECT COUNT(p.personID) 
-    FROM flight AS f 
-    JOIN pilot AS p ON f.support_airline = p.flying_airline AND f.support_tail = p.flying_tail 
-    WHERE f.flightID = ip_flightID
+    FROM pilot AS p
+    WHERE p.flying_airline = (
+        SELECT support_airline 
+        FROM flight 
+        WHERE flightID = ip_flightID
+    ) AND p.flying_tail = (
+        SELECT support_tail 
+        FROM flight 
+        WHERE flightID = ip_flightID
+    )
 ) < 2 THEN
     -- If shortage then delay flight
     UPDATE flight SET next_time = next_time + INTERVAL 30 MINUTE WHERE flightID = ip_flightID;
@@ -499,23 +506,31 @@ IF (
     WHERE f.flightID = ip_flightID
 ) = 'prop' AND (
     SELECT COUNT(p.personID) 
-    FROM flight AS f 
-    JOIN pilot AS p ON f.support_airline = p.flying_airline AND f.support_tail = p.flying_tail 
-    WHERE f.flightID = ip_flightID
+    FROM pilot AS p
+    WHERE p.flying_airline = (
+        SELECT support_airline 
+        FROM flight 
+        WHERE flightID = ip_flightID
+    ) AND p.flying_tail = (
+        SELECT support_tail 
+        FROM flight 
+        WHERE flightID = ip_flightID
+    )
 ) < 1 THEN
     -- If shortage delay flight
     UPDATE flight SET next_time = next_time + INTERVAL 30 MINUTE WHERE flightID = ip_flightID;
     LEAVE sp_main;
 END IF;
 
--- Shortages accounted for, update flight progress
-UPDATE flight SET progress = progress + 1 WHERE flightID = ip_flightID;
-
--- Flight progress updated, update airplane status 
-UPDATE flight SET airplane_status = 'in_flight' WHERE flightID = ip_flightID;
+-- Shortages accounted for, update flight progress and airplane status 
+UPDATE flight 
+SET 
+    progress = progress + 1,
+    airplane_status = 'in_flight'
+WHERE flightID = ip_flightID;
 
 -- Find flight duration 
-SET next_duration = (
+SET nextDuration = (
     SELECT l.distance / a.speed 
     FROM flight AS f 
     JOIN route_path AS r ON f.routeID = r.routeID AND f.progress = r.sequence 
@@ -525,7 +540,7 @@ SET next_duration = (
 );
 
 -- Next flight updated
-UPDATE flight SET next_time = next_time + INTERVAL next_duration HOUR WHERE flightID = ip_flightID;
+UPDATE flight SET next_time = next_time + INTERVAL nextDuration HOUR WHERE flightID = ip_flightID;
 
 end //
 delimiter ;
@@ -570,48 +585,79 @@ delimiter //
 create procedure passengers_disembark (in ip_flightID varchar(50))
 sp_main: begin
 
-	declare deplane_loc varchar(10);
-    
--- Checking if passangers are on flight, that flight is at the destination airport, and Edge case that flight is on the ground
--- Updating plane location if constraints are met 
-	if exists 
-    (SELECT * 
-    FROM flight AS f 
-    JOIN ticket AS t on t.carrier = f.flightID 
-    JOIN person AS p on t.customer=p.personID 
-    JOIN route_path AS r on f.routeID = r.routeID and f.progress=r.sequence 
-    JOIN leg AS l on r.legID=l.legID
-	WHERE flightID = ip_flightID AND airplane_status='on_ground' AND p.locationID = 
-		(SELECT locationID 
-        FROM flight AS f 
-        JOIN airplane AS a on f.support_airline=a.airlineID AND f.support_tail=a.tail_num 
-        WHERE flightID = ip_flightID) AND t.deplane_at=l.arrival) then
+-- Create temporary table to find people whose flights arrived at their ticketed destinations and update their location
+DROP TEMPORARY TABLE IF EXISTS table_temp;
+CREATE TEMPORARY TABLE table_temp AS 
+SELECT 
+    flightID,
+    personID,
+    f.locationID,
+    is_at,
+    airport.locationID AS new_loc
+FROM
+    (SELECT 
+        to_disembark_loc.flightID,
+        personID,
+        to_disembark_loc.locationID,
+        is_at
+    FROM
+        (SELECT 
+            flightID,
+            personID,
+            locationID,
+            is_at
+        FROM
+            (SELECT 
+                flightID,
+                customer,
+                is_at
+            FROM
+                (SELECT 
+                    flightID,
+                    arrival AS is_at
+                FROM 
+                    (SELECT 
+                        flightID,
+                        progress,
+                        airplane_status,
+                        legID
+                    FROM 
+                        flight
+                    JOIN route_path ON flight.routeID = route_path.routeID
+                    WHERE 
+                        progress = sequence
+                        AND airplane_status = 'on_ground'
+                    ) flits_on_ground
+                JOIN leg ON flits_on_ground.legID = leg.legID
+                ) flit_loc
+            JOIN ticket ON flit_loc.flightID = ticket.carrier
+            WHERE 
+                is_at = deplane_at
+            ) pass_to_leave
+        JOIN person ON pass_to_leave.customer = person.personID
+        ) to_disembark_loc
+    JOIN 
+        (SELECT 
+            flightID,
+            locationID
+        FROM 
+            flight
+        JOIN airplane ON flight.support_tail = airplane.tail_num
+        ) flit_loc
+    ON to_disembark_loc.flightID = flit_loc.flightID
+    WHERE 
+        to_disembark_loc.locationID = flit_loc.locationID
+    ) f
+JOIN airport ON f.is_at = airport.airportID
+WHERE 
+    flightID = ip_flightID;
 
-        set deplane_loc = 
-        (SELECT DISTINCT a.locationID 
-        FROM flight AS f 
-        JOIN ticket AS t on t.carrier = f.flightID 
-        JOIN route_path AS r on f.routeID = r.routeID AND f.progress=r.sequence 
-        JOIN leg AS l on r.legID=l.legID JOIN airport AS a on a.airportID=l.arrival 
-        WHERE flightID =ip_flightID AND t.deplane_at=l.arrival);
-        
--- update person locationID 
-        update person set locationID = deplane_loc
-        WHERE personID in 
-			(SELECT * 
-            FROM 
-				(SELECT t.customer 
-                FROM flight AS f 
-                JOIN ticket AS t on t.carrier = f.flightID 
-                JOIN person AS p on t.customer=p.personID 
-                JOIN route_path AS r on f.routeID = r.routeID AND f.progress=r.sequence 
-                JOIN leg AS l on r.legID=l.legID 
-                WHERE flightID =ip_flightID AND airplane_status='on_ground' and p.locationID = 
-					(SELECT locationID 
-					FROM flight AS f 
-                    JOIN airplane AS a on f.support_airline=a.airlineID AND f.support_tail=a.tail_num 
-                    WHERE flightID = ip_flightID) AND t.deplane_at=l.arrival) AS temp);               
-	end if;
+SET @location = (SELECT new_loc FROM table_temp WHERE flightID = ip_flightID LIMIT 1);
+
+UPDATE person 
+SET locationID = @location
+WHERE personID IN (SELECT personID FROM table_temp);
+
 end //
 delimiter ;
 
@@ -1118,41 +1164,43 @@ create procedure simulation_cycle ()
 sp_main: begin
 
 -- Declare variables
-DECLARE sel_flightID VARCHAR(100);
-DECLARE sel_flightID_maxprogress INT;
-DECLARE sel_progress VARCHAR(100);
+DECLARE flightID_select VARCHAR(100);
+DECLARE flightID_select_maxprogress INT;
+DECLARE selected_progress VARCHAR(100);
 
 -- Select the flight with the minimum next_time and specific sorting criteria
-SELECT flightID INTO sel_flightID
+SELECT flightID INTO flightID_select
 FROM flight
 WHERE next_time IS NOT NULL
 ORDER BY next_time, CASE WHEN airplane_status = 'in_flight' THEN 0 WHEN airplane_status = 'on_ground' THEN 1 ELSE 2 END, flightID
 LIMIT 1;
 
 -- Select progress for the selected flight
-SELECT progress INTO sel_progress
+SELECT progress INTO selected_progress
 FROM flight
-WHERE flightID = sel_flightID;
+WHERE flightID = flightID_select;
 
 -- Select the maximum progress from the route_path for the selected flight
-SELECT MAX(sequence) INTO sel_flightID_maxprogress
+SELECT MAX(sequence) INTO flightID_select_maxprogress
 FROM flight
 NATURAL JOIN route_path
-WHERE flightID = sel_flightID
+WHERE flightID = flightID_select
 GROUP BY flightID;
 
 -- Perform actions based on airplane_status and progress
-IF (SELECT airplane_status FROM flight WHERE flightID = sel_flightID) = 'in_flight' THEN
-    CALL flight_landing(sel_flightID);
-    CALL passengers_disembark(sel_flightID);
-ELSEIF (SELECT airplane_status FROM flight WHERE flightID = sel_flightID) = 'on_ground'
-    AND sel_progress < sel_flightID_maxprogress THEN
-    CALL passengers_board(sel_flightID);
-    CALL flight_takeoff(sel_flightID);
-ELSEIF (SELECT airplane_status FROM flight WHERE flightID = sel_flightID) = 'on_ground'
-    AND sel_progress = sel_flightID_maxprogress THEN
-    CALL recycle_crew(sel_flightID);
-    CALL retire_flight(sel_flightID);
+IF (SELECT airplane_status FROM flight WHERE flightID = flightID_select) = 'in_flight' THEN
+    CALL flight_landing(flightID_select);
+    CALL passengers_disembark(flightID_select);
+    
+ELSEIF (SELECT airplane_status FROM flight WHERE flightID = flightID_select) = 'on_ground'
+    AND selected_progress < flightID_select_maxprogress THEN
+    CALL passengers_board(flightID_select);
+    CALL flight_takeoff(flightID_select);
+    
+ELSEIF (SELECT airplane_status FROM flight WHERE flightID = flightID_select) = 'on_ground'
+    AND selected_progress = flightID_select_maxprogress THEN
+    CALL recycle_crew(flightID_select);
+    CALL retire_flight(flightID_select);
 END IF;
 
 end //
