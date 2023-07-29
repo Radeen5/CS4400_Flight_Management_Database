@@ -84,7 +84,7 @@ create procedure add_airport (in ip_airportID char(3), in ip_airport_name varcha
 sp_main: begin
 
 	-- Airport Uniqe ID
-    if ip_airportID is NULL OR ip_airportID in (SELECT airportID FROM airport) then 
+    if ip_airportID in (SELECT airportID FROM airport) OR ip_airportID is NULL then 
 		leave sp_main;
 	end if;
     
