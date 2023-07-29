@@ -1172,7 +1172,10 @@ DECLARE selected_progress VARCHAR(100);
 SELECT flightID INTO flightID_select
 FROM flight
 WHERE next_time IS NOT NULL
-ORDER BY next_time, CASE WHEN airplane_status = 'in_flight' THEN 0 WHEN airplane_status = 'on_ground' THEN 1 ELSE 2 END, flightID
+ORDER BY next_time, 
+	CASE WHEN airplane_status = 'in_flight' THEN 0 ELSE 1 END,
+	CASE WHEN airplane_status = 'in_flight' THEN flightID END,
+	flightID ASC
 LIMIT 1;
 
 -- Select progress for the selected flight
