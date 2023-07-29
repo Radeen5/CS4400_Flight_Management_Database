@@ -792,22 +792,22 @@ delimiter //
 create procedure remove_passenger_role (in ip_personID varchar(50))
 sp_main: begin
 
-DECLARE is_on_ground INT;
-DECLARE is_passenger INT;
+DECLARE onGround INT;
+DECLARE isPass INT;
 
 -- Edge case: Passenger must exist 
-SELECT 1 INTO is_passenger FROM passenger WHERE personID = ip_personID;
+SELECT 1 INTO isPass FROM passenger WHERE personID = ip_personID;
 
-IF is_passenger IS NULL THEN
+IF isPass IS NULL THEN
     LEAVE sp_main;
 END IF;
 
 -- Passenger is on the ground 
-SELECT 1 INTO is_on_ground
+SELECT 1 INTO onGround
 FROM passenger
 WHERE personID = ip_personID AND personID IN (SELECT personID FROM person WHERE locationID LIKE '%plane%');
 
-IF is_on_ground IS NOT NULL THEN
+IF onGround IS NOT NULL THEN
     LEAVE sp_main;
 END IF;
 
@@ -837,31 +837,31 @@ delimiter //
 create procedure remove_pilot_role (in ip_personID varchar(50))
 sp_main: begin
 
-DECLARE pilot_exists INT DEFAULT 0;
-DECLARE pilot_flying INT DEFAULT 0;
-DECLARE pilot_passenger INT DEFAULT 0;
+DECLARE pilotExists INT DEFAULT 0;
+DECLARE pilotFlying INT DEFAULT 0;
+DECLARE pilotPassenger INT DEFAULT 0;
 
 -- Check if the pilot exists
-SELECT 1 INTO pilot_exists FROM pilot WHERE personID = ip_personID;
+SELECT 1 INTO pilotExists FROM pilot WHERE personID = ip_personID;
 
 -- Ensure pilot is not flying
-IF pilot_exists = 1 THEN
-	SELECT 1 INTO pilot_flying FROM pilot 
+IF pilotExists = 1 THEN
+	SELECT 1 INTO pilotFlying FROM pilot 
 	WHERE personID = ip_personID AND flying_airline IS NOT NULL;
     
-	SELECT 1 INTO pilot_passenger FROM pilot 
+	SELECT 1 INTO pilotPassenger FROM pilot 
 	WHERE personID = ip_personID AND flying_tail IN (
 		SELECT support_tail FROM flight 
 		WHERE routeID IN (SELECT routeID FROM route_path WHERE sequence = 2)
 	);
     
-	IF pilot_flying = 1 OR pilot_passenger = 1 THEN
+	IF pilotFlying = 1 OR pilotPassenger = 1 THEN
 		LEAVE sp_main;
 	END IF;
 END IF;
 
 -- Remove pilot information (Unless passenger)
-IF pilot_exists = 1 THEN
+IF pilotExists = 1 THEN
 	IF NOT EXISTS (SELECT 1 FROM passenger WHERE personID = ip_personID) THEN
 		DELETE FROM pilot_licenses WHERE personID = ip_personID;
 		DELETE FROM pilot WHERE personID = ip_personID;
@@ -965,7 +965,7 @@ WITH flight_data AS (
         a.locationID AS airplane_location,
         p.personID,
         CASE WHEN pilot.personID IS NOT NULL THEN 1 ELSE 0 END AS is_pilot,
-        CASE WHEN passenger.personID IS NOT NULL THEN 1 ELSE 0 END AS is_passenger,
+        CASE WHEN passenger.personID IS NOT NULL THEN 1 ELSE 0 END AS isPass,
         f.next_time
     FROM
         flight AS f
@@ -987,7 +987,7 @@ SELECT
     MIN(next_time) AS earliest_arrival,
     MAX(next_time) AS latest_arrival,
     SUM(is_pilot) AS num_pilots,
-    SUM(is_passenger) AS num_passengers,
+    SUM(isPass) AS num_passengers,
     COUNT(personID) AS joint_pilots_passengers,
     GROUP_CONCAT(personID) AS person_list
 FROM
