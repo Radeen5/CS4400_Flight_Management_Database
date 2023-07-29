@@ -1171,8 +1171,7 @@ DECLARE selected_progress VARCHAR(100);
 -- Select the flight with the minimum next_time and specific sorting criteria
 SELECT flightID INTO flightID_select
 FROM flight
-WHERE next_time IS NOT NULL
-ORDER BY next_time, 
+ORDER BY next_time,
 	CASE WHEN airplane_status = 'in_flight' THEN 0 ELSE 1 END,
 	CASE WHEN airplane_status = 'in_flight' THEN flightID END,
 	flightID ASC
